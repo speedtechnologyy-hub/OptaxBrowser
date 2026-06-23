@@ -3,12 +3,41 @@ name: Build & Release
 on:
   push:
     tags:
-      - 'v*'        # Dispara quando você cria uma tag tipo v1.0.0
-  workflow_dispatch:  # Permite rodar manualmente pelo GitHub
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
+  # Cria o Release no GitHub ANTES dos builds
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create_release.outputs.id }}
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Criar GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Opta X Browser ${{ github.ref_name }}
+          body: |
+            ## Opta X Browser ${{ github.ref_name }}
+            
+            Baixe o instalador para o seu sistema:
+            - **Windows**: `Opta-X-Setup-*.exe`
+            - **macOS**: `Opta-X-*.dmg`
+            - **Linux**: `Opta-X-*.AppImage`
+          draft: false
+          prerelease: false
+
   build:
+    needs: create-release
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -28,7 +57,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
 
       - name: Instalar dependências
         run: npm install
@@ -44,13 +72,10 @@ jobs:
         run: npm run build && npx electron-builder --mac --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Para assinar o app no macOS (opcional — sem isso funciona mas pede confirmação):
-          # CSC_LINK: ${{ secrets.MAC_CERT }}
-          # CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
 
       - name: Build Linux
         if: matrix.platform == 'linux'
-        run: npm run build && npx electron-builder --linux --publish always
+        run: npm run build && npx electron-builder --linux AppImage --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -62,5 +87,4 @@ jobs:
             release/*.exe
             release/*.dmg
             release/*.AppImage
-            release/*.deb
           if-no-files-found: ignore

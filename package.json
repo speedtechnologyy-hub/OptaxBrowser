@@ -2,6 +2,11 @@
   "name": "opta-x",
   "private": true,
   "version": "1.0.0",
+  "author": {
+    "name": "Speed Technology",
+    "email": "speedtechnologyy@gmail.com"
+  },
+  "description": "Opta X Browser — navegador desktop da Speed Technology",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
