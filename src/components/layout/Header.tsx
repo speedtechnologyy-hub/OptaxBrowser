@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { ChevronLeft, ChevronRight, RotateCw, PanelLeft, Columns, Search, ShieldCheck, Star, Download, LayoutDashboard, Puzzle } from 'lucide-react'
 import type { SidebarMode } from '../../types'
@@ -33,6 +33,32 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigate, onToggleFavorite, isFavorite, mousePos,
   onToggleDownloads, isAnyDownloading, onOpenHub, onOpenMenu, isMenuOpen, onOpenExtensions
 }) => {
+  const [pinnedExts, setPinnedExts] = useState<string[]>([])
+
+  useEffect(() => {
+    const load = () => {
+      try { setPinnedExts(JSON.parse(localStorage.getItem('pinnedExtensions') || '[]')) } catch {}
+    }
+    load()
+    // Re-read when storage changes (ExtensionsPage pins/unpins)
+    window.addEventListener('storage', load)
+    // Also poll every 2s in case it changed in same window
+    const interval = setInterval(load, 2000)
+    return () => { window.removeEventListener('storage', load); clearInterval(interval) }
+  }, [])
+
+  // Extension catalog (same as ExtensionsPage)
+  const EXT_CATALOG = [
+    { id: 'ublock', name: 'uBlock Origin', emoji: '🛡️' },
+    { id: 'bitwarden', name: 'Bitwarden', emoji: '🔐' },
+    { id: 'dark-reader', name: 'Dark Reader', emoji: '🌙' },
+    { id: 'grammarly', name: 'Grammarly', emoji: '✍️' },
+    { id: 'lastpass', name: 'LastPass', emoji: '🔑' },
+    { id: 'honey', name: 'Honey', emoji: '🍯' },
+    { id: 'momentum', name: 'Momentum', emoji: '🌅' },
+    { id: 'todoist', name: 'Todoist', emoji: '✅' },
+  ]
+
   return (
     <div
       className="h-[42px] flex items-center px-3 gap-2 shrink-0"
@@ -134,8 +160,23 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Extension icons */}
+      {/* Extension icons — pinned */}
       <div className="flex items-center gap-0.5 shrink-0" style={{ WebkitAppRegion: 'no-drag' } as any}>
+        {pinnedExts.map(id => {
+          const ext = EXT_CATALOG.find(e => e.id === id)
+          if (!ext) return null
+          return (
+            <button
+              key={id}
+              title={ext.name}
+              onClick={onOpenExtensions}
+              className="w-[26px] h-[26px] flex items-center justify-center rounded-md hover:bg-white/[0.08] transition-colors text-[13px]"
+              style={{ WebkitAppRegion: 'no-drag' } as any}
+            >
+              {ext.emoji}
+            </button>
+          )
+        })}
         <button
           onClick={onOpenExtensions}
           className="w-[26px] h-[26px] flex items-center justify-center rounded-md hover:bg-white/[0.08] transition-colors"

@@ -45,6 +45,8 @@ export const PasswordsPage: React.FC<{ onClose?: () => void }> = ({ onClose }) =
   const save = (data: Password[]) => {
     setPasswords(data)
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+    // Sync to electron-store for autofill
+    ;(window as any).electronAPI?.send('save-passwords', data)
   }
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {

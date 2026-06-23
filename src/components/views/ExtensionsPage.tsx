@@ -197,8 +197,14 @@ export const ExtensionsPage: React.FC<ExtensionsPageProps> = ({ onClose }) => {
                             const isPinned = pinned.includes(ext.id)
                             const next = isPinned ? pinned.filter((p: string) => p !== ext.id) : [...pinned, ext.id]
                             localStorage.setItem('pinnedExtensions', JSON.stringify(next))
+                            // Notify Header immediately
+                            window.dispatchEvent(new StorageEvent('storage', { key: 'pinnedExtensions', newValue: JSON.stringify(next) }))
                           }}
-                          className="px-2 py-1 rounded-lg text-[9px] font-bold bg-white/5 text-white/25 hover:text-white/60 transition-all"
+                          className={`px-2 py-1 rounded-lg text-[9px] font-bold transition-all ${
+                            JSON.parse(localStorage.getItem('pinnedExtensions') || '[]').includes(ext.id)
+                              ? 'bg-purple-500/20 text-purple-300'
+                              : 'bg-white/5 text-white/25 hover:text-white/60'
+                          }`}
                           title="Fixar na barra de ferramentas"
                         >
                           📌
