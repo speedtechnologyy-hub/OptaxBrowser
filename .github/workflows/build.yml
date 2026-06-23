@@ -7,35 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Cria o Release no GitHub ANTES dos builds
-  create-release:
-    runs-on: ubuntu-latest
-    outputs:
-      release_id: ${{ steps.create_release.outputs.id }}
-    steps:
-      - name: Checkout código
-        uses: actions/checkout@v4
-
-      - name: Criar GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          release_name: Opta X Browser ${{ github.ref_name }}
-          body: |
-            ## Opta X Browser ${{ github.ref_name }}
-            
-            Baixe o instalador para o seu sistema:
-            - **Windows**: `Opta-X-Setup-*.exe`
-            - **macOS**: `Opta-X-*.dmg`
-            - **Linux**: `Opta-X-*.AppImage`
-          draft: false
-          prerelease: false
-
   build:
-    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -63,19 +35,19 @@ jobs:
 
       - name: Build Windows
         if: matrix.platform == 'win'
-        run: npm run build && npx electron-builder --win --publish always
+        run: npm run build && npx electron-builder --win --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build macOS
         if: matrix.platform == 'mac'
-        run: npm run build && npx electron-builder --mac --publish always
+        run: npm run build && npx electron-builder --mac --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Linux
         if: matrix.platform == 'linux'
-        run: npm run build && npx electron-builder --linux AppImage --publish always
+        run: npm run build && npx electron-builder --linux AppImage --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -88,3 +60,32 @@ jobs:
             release/*.dmg
             release/*.AppImage
           if-no-files-found: ignore
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download todos os artefatos
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Listar arquivos
+        run: find artifacts -type f
+
+      - name: Criar Release e fazer upload
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Opta X Browser ${{ github.ref_name }}
+          body: |
+            ## Opta X Browser ${{ github.ref_name }}
+            
+            Baixe o instalador para o seu sistema:
+            - **Windows**: arquivo `.exe`
+            - **macOS**: arquivo `.dmg`
+            - **Linux**: arquivo `.AppImage`
+          files: artifacts/**/*
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
