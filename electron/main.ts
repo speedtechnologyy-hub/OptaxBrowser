@@ -56,35 +56,40 @@ function createTabView(id: string, url: string = 'https://google.com') {
     // ── AUTOFILL DE SENHAS ────────────────────────────────────────────────
     try {
       const pageUrl = view.webContents.getURL()
-      if (!pageUrl.startsWith('http')) return
+      if (!pageUrl || !pageUrl.startsWith('http')) return
       const passwords: any[] = store.get('saved_passwords', []) as any[]
-      if (passwords.length === 0) return
-      const pageHost = new URL(pageUrl).hostname.replace(/^www\./, '')
+      if (!passwords || passwords.length === 0) return
+      let pageHost = ''
+      try { pageHost = new URL(pageUrl).hostname.replace(/^www\./, '') } catch { return }
+      if (!pageHost) return
       const match = passwords.find((p: any) => {
+        if (!p || !p.url) return false
         try { return new URL(p.url).hostname.replace(/^www\./, '') === pageHost } catch { return false }
       })
       if (!match) return
       const script = `
         (function() {
           function tryFill() {
-            const inputs = Array.from(document.querySelectorAll('input'));
-            let userField = null, passField = null;
-            inputs.forEach(inp => {
-              const t = (inp.type || '').toLowerCase();
-              const n = (inp.name + inp.id + (inp.autocomplete||'')).toLowerCase();
-              if (!passField && t === 'password') passField = inp;
-              if (!userField && (t === 'email' || t === 'text' || n.includes('user') || n.includes('email') || n.includes('login'))) userField = inp;
-            });
-            if (userField && passField) {
-              const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-              setter.call(userField, ${JSON.stringify(match.username)});
-              userField.dispatchEvent(new Event('input', { bubbles: true }));
-              userField.dispatchEvent(new Event('change', { bubbles: true }));
-              setter.call(passField, ${JSON.stringify(match.password)});
-              passField.dispatchEvent(new Event('input', { bubbles: true }));
-              passField.dispatchEvent(new Event('change', { bubbles: true }));
-              return true;
-            }
+            try {
+              const inputs = Array.from(document.querySelectorAll('input'));
+              let userField = null, passField = null;
+              inputs.forEach(inp => {
+                const t = (inp.type || '').toLowerCase();
+                const n = ((inp.name||'') + (inp.id||'') + (inp.autocomplete||'')).toLowerCase();
+                if (!passField && t === 'password') passField = inp;
+                if (!userField && (t === 'email' || t === 'text' || n.includes('user') || n.includes('email') || n.includes('login'))) userField = inp;
+              });
+              if (userField && passField) {
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                setter.call(userField, ${JSON.stringify(match.username)});
+                userField.dispatchEvent(new Event('input', { bubbles: true }));
+                userField.dispatchEvent(new Event('change', { bubbles: true }));
+                setter.call(passField, ${JSON.stringify(match.password)});
+                passField.dispatchEvent(new Event('input', { bubbles: true }));
+                passField.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+              }
+            } catch(e) {}
             return false;
           }
           if (!tryFill()) { setTimeout(tryFill, 800); setTimeout(tryFill, 2500); }
