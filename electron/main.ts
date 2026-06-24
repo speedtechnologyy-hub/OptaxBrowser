@@ -7,19 +7,8 @@ import https from 'https'
 
 const store = new Store()
 
-// ── AUTO UPDATER ──────────────────────────────────────────────────────────────
-// Só ativa em produção (não no dev)
+// ── AUTO UPDATER — disabled temporarily to prevent startup crash ──────────────
 let autoUpdater: any = null
-if (!process.env.VITE_DEV_SERVER_URL) {
-  try {
-    const updaterModule = require('electron-updater')
-    autoUpdater = updaterModule.autoUpdater
-    autoUpdater.autoDownload = true          // Baixa automaticamente em background
-    autoUpdater.autoInstallOnAppQuit = true  // Instala quando o usuário fechar o app
-  } catch (e) {
-    console.log('electron-updater not available:', e)
-  }
-}
 
 let mainWindow: BrowserWindow | null = null
 const tabs = new Map<string, WebContentsView>()
@@ -598,13 +587,15 @@ function createWindow() {
 
   // Reload saved dev extensions
   const savedDevExts: string[] = store.get('devExtensions', []) as string[]
-  savedDevExts.forEach(async (extPath: string) => {
-    try {
-      if (fs.existsSync(extPath)) {
-        await session.defaultSession.loadExtension(extPath, { allowFileAccess: true })
-      }
-    } catch(e) { console.error('Failed to reload extension:', extPath, e) }
-  })
+  ;(async () => {
+    for (const extPath of savedDevExts) {
+      try {
+        if (fs.existsSync(extPath) && fs.existsSync(path.join(extPath, 'manifest.json'))) {
+          await session.defaultSession.loadExtension(extPath, { allowFileAccess: true })
+        }
+      } catch(e) { console.error('Failed to reload extension:', extPath, e) }
+    }
+  })()
 
   mainWindow.webContents.once('did-finish-load', () => {
     // Read startup preference saved by SettingsPage
@@ -1067,52 +1058,59 @@ function createWindow() {
     const extDir = path.join(userData, 'extensions', extId)
     try {
       // Use https directly with Chrome headers
-      const crxUrl = `https://clients2.google.com/service/update2/crx?response=redirect&prodversion=120.0.6099.234&acceptformat=crx3,crx2&x=id%3D${extId}%26uc&nacl_arch=x86-64&prodchannel=stable`
+      // Try multiple CRX download URLs - Google changes these periodically
+      const crxUrls = [
+        `https://clients2.google.com/service/update2/crx?response=redirect&os=win&arch=x86-64&nacl_arch=x86-64&prod=chromiumcrx&prodchannel=unknown&prodversion=120.0.6099.234&acceptformat=crx3&x=id%3D${extId}%26uc`,
+        `https://clients2.google.com/service/update2/crx?response=redirect&prodversion=120.0.6099.234&acceptformat=crx3&x=id%3D${extId}%26installsource%3Dondemand%26uc`,
+        `https://update.googleapis.com/service/update2/crx?response=redirect&prodversion=120.0.6099.234&acceptformat=crx3&x=id%3D${extId}%26uc`,
+      ]
 
-      await new Promise<void>((resolve, reject) => {
-        const chromeUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.234 Safari/537.36'
-        
-        const doRequest = (url: string, depth = 0) => {
-          if (depth > 5) { reject(new Error('Muitos redirecionamentos')); return }
-          const urlObj = new URL(url)
-          const mod = urlObj.protocol === 'https:' ? require('https') : require('http')
-          const req = mod.get(url, {
-            headers: {
-              'User-Agent': chromeUA,
-              'Accept': '*/*',
-              'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8'
+      let downloaded = false
+      for (const crxUrl of crxUrls) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const chromeUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.234 Safari/537.36'
+            const doRequest = (url: string, depth = 0) => {
+              if (depth > 5) { reject(new Error('Muitos redirecionamentos')); return }
+              const urlObj = new URL(url)
+              const mod = urlObj.protocol === 'https:' ? require('https') : require('http')
+              const req = mod.get(url, {
+                headers: { 'User-Agent': chromeUA, 'Accept': '*/*', 'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8' }
+              }, (res: any) => {
+                if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 303) {
+                  doRequest(res.headers.location, depth + 1); return
+                }
+                if (res.statusCode === 204 || res.statusCode === 404) {
+                  reject(new Error(`HTTP ${res.statusCode}`)); return
+                }
+                if (res.statusCode !== 200) {
+                  reject(new Error(`HTTP ${res.statusCode}`)); return
+                }
+                const chunks: Buffer[] = []
+                res.on('data', (c: Buffer) => chunks.push(c))
+                res.on('end', () => { fs.writeFileSync(crxFile, Buffer.concat(chunks)); resolve() })
+                res.on('error', reject)
+              })
+              req.on('error', reject)
+              req.setTimeout(20000, () => { req.destroy(); reject(new Error('Timeout')) })
             }
-          }, (res: any) => {
-            if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 303) {
-              doRequest(res.headers.location, depth + 1)
-              return
-            }
-            if (res.statusCode !== 200) {
-              reject(new Error(`HTTP ${res.statusCode}`))
-              return
-            }
-            const chunks: Buffer[] = []
-            res.on('data', (c: Buffer) => chunks.push(c))
-            res.on('end', () => {
-              const buf = Buffer.concat(chunks)
-              fs.writeFileSync(crxFile, buf)
-              resolve()
-            })
-            res.on('error', reject)
+            doRequest(crxUrl)
           })
-          req.on('error', reject)
-          req.setTimeout(20000, () => { req.destroy(); reject(new Error('Timeout')) })
+          // Check if we got real CRX data
+          const size = fs.statSync(crxFile).size
+          if (size > 1000) { downloaded = true; break }
+        } catch(e: any) {
+          console.log(`[CRX] URL failed: ${crxUrl} — ${e.message}`)
         }
-        doRequest(crxUrl)
-      })
+      }
+
+      if (!downloaded) {
+        try { fs.unlink(crxFile, () => {}) } catch {}
+        return { success: false, error: 'Download bloqueado pelo Google. Tente instalar via Modo Desenvolvedor (.crx manual)' }
+      }
 
       const crxData = fs.readFileSync(crxFile)
       console.log(`[CRX] Downloaded ${crxData.length} bytes for ${extId}`)
-      
-      if (crxData.length < 1000) {
-        fs.unlink(crxFile, () => {})
-        return { success: false, error: `Download incompleto (${crxData.length} bytes) — extensão pode não estar disponível` }
-      }
 
       let zipStart = -1
       for (let i = 0; i < crxData.length - 4; i++) {
