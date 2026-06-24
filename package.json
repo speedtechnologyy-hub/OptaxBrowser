@@ -34,7 +34,9 @@
       "dist-electron"
     ],
     "win": {
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -43,14 +45,18 @@
       "runAfterFinish": true
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "category": "public.app-category.utilities"
     },
     "dmg": {
       "title": "Opta X Browser"
     },
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "category": "Network"
     }
   },
@@ -73,7 +79,7 @@
     "@vitejs/plugin-react": "^6.0.1",
     "autoprefixer": "^10.5.0",
     "concurrently": "^9.2.1",
-    "electron": "^42.0.1",
+    "electron": "^42.5.0",
     "electron-builder": "^26.8.1",
     "esbuild": "^0.28.0",
     "eslint": "^10.3.0",

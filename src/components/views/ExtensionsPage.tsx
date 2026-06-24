@@ -34,13 +34,17 @@ export const ExtensionsPage: React.FC<ExtensionsPageProps> = ({ onClose }) => {
   const [installed, setInstalled] = useState<string[]>([])
   const [devMode, setDevMode] = useState(false)
 
-  // Load saved dev extensions on mount
+  const [pinnedIds, setPinnedIds] = useState<string[]>([])
+
+  // Load saved dev extensions and pinned state on mount
   React.useEffect(() => {
-    ;(window as any).electronAPI?.getDevExtensions?.().then((exts: any[]) => {
-      if (exts?.length) {
-        setDevExtensions(exts)
-        setDevMode(true)
-      }
+    const api = (window as any).electronAPI
+    api?.getDevExtensions?.().then((exts: any[]) => {
+      if (exts?.length) { setDevExtensions(exts); setDevMode(true) }
+    })
+    // Load real pinned extension IDs from electron-store
+    api?.getPinnedExtensions?.().then((ids: string[]) => {
+      if (ids?.length) setPinnedIds(ids)
     })
   }, [])
   const [devExtensions, setDevExtensions] = useState<DevExtension[]>([])
@@ -192,16 +196,20 @@ export const ExtensionsPage: React.FC<ExtensionsPageProps> = ({ onClose }) => {
                           {ext.enabled ? 'Ativo' : 'Inativo'}
                         </button>
                         <button
-                          onClick={() => {
-                            const pinned = JSON.parse(localStorage.getItem('pinnedExtensions') || '[]')
-                            const isPinned = pinned.includes(ext.id)
-                            const next = isPinned ? pinned.filter((p: string) => p !== ext.id) : [...pinned, ext.id]
-                            localStorage.setItem('pinnedExtensions', JSON.stringify(next))
-                            // Notify Header immediately
-                            window.dispatchEvent(new StorageEvent('storage', { key: 'pinnedExtensions', newValue: JSON.stringify(next) }))
+                          onClick={async () => {
+                            const api = (window as any).electronAPI
+                            // Get real loaded extension ID from Electron
+                            const loaded: any[] = await api?.getLoadedExtensions?.() || []
+                            const realExt = loaded.find((e: any) => e.name === ext.name || e.id.includes(ext.id))
+                            const realId = realExt?.id || ext.id
+                            const next = pinnedIds.includes(realId)
+                              ? pinnedIds.filter(p => p !== realId)
+                              : [...pinnedIds, realId]
+                            setPinnedIds(next)
+                            api?.setPinnedExtensions?.(next)
                           }}
                           className={`px-2 py-1 rounded-lg text-[9px] font-bold transition-all ${
-                            JSON.parse(localStorage.getItem('pinnedExtensions') || '[]').includes(ext.id)
+                            pinnedIds.includes(ext.id) || pinnedIds.some(id => id.includes(ext.id))
                               ? 'bg-purple-500/20 text-purple-300'
                               : 'bg-white/5 text-white/25 hover:text-white/60'
                           }`}

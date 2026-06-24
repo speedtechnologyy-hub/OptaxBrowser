@@ -93,6 +93,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('open-history-panel', () => cb())
     return () => ipcRenderer.removeAllListeners('open-history-panel')
   },
+  getLoadedExtensions: () => ipcRenderer.invoke('get-loaded-extensions'),
+  getPinnedExtensions: () => ipcRenderer.invoke('get-pinned-extensions'),
+  setPinnedExtensions: (ids: string[]) => ipcRenderer.send('set-pinned-extensions', ids),
+  onPinnedExtensionsUpdated: (cb: (ids: string[]) => void) => {
+    ipcRenderer.on('pinned-extensions-updated', (_: any, ids: string[]) => cb(ids))
+    return () => ipcRenderer.removeAllListeners('pinned-extensions-updated')
+  },
+  onExtensionInstalled: (cb: (info: any) => void) => {
+    ipcRenderer.on('extension-installed', (_: any, info: any) => cb(info))
+    return () => ipcRenderer.removeAllListeners('extension-installed')
+  },
+  onExtensionInstalling: (cb: (info: any) => void) => {
+    ipcRenderer.on('extension-installing', (_: any, info: any) => cb(info))
+    return () => ipcRenderer.removeAllListeners('extension-installing')
+  },
   windowControl: (action: string) => ipcRenderer.send('window-control', action),
   send: (channel: string, ...args: any[]) => ipcRenderer.send(channel, ...args),
   invoke: (channel: string, ...args: any[]) => ipcRenderer.invoke(channel, ...args)

@@ -33,31 +33,25 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigate, onToggleFavorite, isFavorite, mousePos,
   onToggleDownloads, isAnyDownloading, onOpenHub, onOpenMenu, isMenuOpen, onOpenExtensions
 }) => {
-  const [pinnedExts, setPinnedExts] = useState<string[]>([])
+  const [pinnedExts, setPinnedExts] = useState<{id:string,name:string,iconUrl:string}[]>([])
 
   useEffect(() => {
-    const load = () => {
-      try { setPinnedExts(JSON.parse(localStorage.getItem('pinnedExtensions') || '[]')) } catch {}
+    const api = (window as any).electronAPI
+    const load = async () => {
+      try {
+        const [loaded, pinned]: [any[], string[]] = await Promise.all([
+          api?.getLoadedExtensions?.() || [],
+          api?.getPinnedExtensions?.() || []
+        ])
+        const pinnedList = loaded.filter((e: any) => pinned.includes(e.id))
+        setPinnedExts(pinnedList)
+      } catch {}
     }
     load()
-    // Re-read when storage changes (ExtensionsPage pins/unpins)
-    window.addEventListener('storage', load)
-    // Also poll every 2s in case it changed in same window
-    const interval = setInterval(load, 2000)
-    return () => { window.removeEventListener('storage', load); clearInterval(interval) }
+    const cleanup = api?.onPinnedExtensionsUpdated?.(async () => { await load() })
+    const interval = setInterval(load, 3000)
+    return () => { cleanup?.(); clearInterval(interval) }
   }, [])
-
-  // Extension catalog (same as ExtensionsPage)
-  const EXT_CATALOG = [
-    { id: 'ublock', name: 'uBlock Origin', emoji: '🛡️' },
-    { id: 'bitwarden', name: 'Bitwarden', emoji: '🔐' },
-    { id: 'dark-reader', name: 'Dark Reader', emoji: '🌙' },
-    { id: 'grammarly', name: 'Grammarly', emoji: '✍️' },
-    { id: 'lastpass', name: 'LastPass', emoji: '🔑' },
-    { id: 'honey', name: 'Honey', emoji: '🍯' },
-    { id: 'momentum', name: 'Momentum', emoji: '🌅' },
-    { id: 'todoist', name: 'Todoist', emoji: '✅' },
-  ]
 
   return (
     <div
@@ -160,23 +154,27 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Extension icons — pinned */}
+      {/* Extension icons — pinned real extensions */}
       <div className="flex items-center gap-0.5 shrink-0" style={{ WebkitAppRegion: 'no-drag' } as any}>
-        {pinnedExts.map(id => {
-          const ext = EXT_CATALOG.find(e => e.id === id)
-          if (!ext) return null
-          return (
-            <button
-              key={id}
-              title={ext.name}
-              onClick={onOpenExtensions}
-              className="w-[26px] h-[26px] flex items-center justify-center rounded-md hover:bg-white/[0.08] transition-colors text-[13px]"
-              style={{ WebkitAppRegion: 'no-drag' } as any}
-            >
-              {ext.emoji}
-            </button>
-          )
-        })}
+        {pinnedExts.map(ext => (
+          <button
+            key={ext.id}
+            title={ext.name}
+            onClick={async () => {
+              // Try to open the extension popup
+              const api = (window as any).electronAPI
+              const result = await api?.invoke('open-extension-popup', { extId: ext.id })
+              if (!result?.success) onOpenExtensions()
+            }}
+            className="w-[26px] h-[26px] flex items-center justify-center rounded-md hover:bg-white/[0.08] transition-colors"
+            style={{ WebkitAppRegion: 'no-drag' } as any}
+          >
+            {ext.iconUrl
+              ? <img src={ext.iconUrl} className="w-4 h-4 rounded" onError={e => (e.currentTarget.style.display='none')} />
+              : <span className="text-[13px]">🧩</span>
+            }
+          </button>
+        ))}
         <button
           onClick={onOpenExtensions}
           className="w-[26px] h-[26px] flex items-center justify-center rounded-md hover:bg-white/[0.08] transition-colors"

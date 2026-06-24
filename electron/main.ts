@@ -3,6 +3,7 @@ import Store from 'electron-store'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
+import https from 'https'
 
 const store = new Store()
 
@@ -53,6 +54,138 @@ function createTabView(id: string, url: string = 'https://google.com') {
         id, url: view.webContents.getURL(), title: view.webContents.getTitle(),
       })
     }
+
+    // ── CHROME WEB STORE INTERCEPTOR ─────────────────────────────────────
+    try {
+      const pageUrl = view.webContents.getURL()
+      if (pageUrl.includes('chrome.google.com/webstore') || pageUrl.includes('chromewebstore.google.com')) {
+        // First expose the install function
+        view.webContents.executeJavaScript(`
+          window.__optaxInstall = (extId, extName) => {
+            return window.electronAPI?.invoke('install-webstore-extension', { extId, extName }) || Promise.resolve({ success: false, error: 'API não disponível' });
+          };
+        `).catch(() => {})
+
+        const interceptScript = `
+          (function() {
+            if (window.__optaxInjected) return;
+            window.__optaxInjected = true;
+
+            const BTN_ID = '__optax_install_btn__';
+            const TOAST_ID = '__optax_toast__';
+
+            function getExtId() {
+              const match = location.href.match(/(?:detail\\/[^\\/]+\\/|[?&]id=)([a-z]{32})/);
+              return match ? match[1] : null;
+            }
+
+            function getExtName() {
+              const h1 = document.querySelector('h1');
+              return h1 ? h1.textContent.trim() : 'Extensão';
+            }
+
+            function clearEl(el) { while(el.firstChild) el.removeChild(el.firstChild); }
+
+            function showToast(msg, isError, isLoading) {
+              let toast = document.getElementById(TOAST_ID);
+              if (!toast) {
+                toast = document.createElement('div');
+                toast.id = TOAST_ID;
+                toast.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:2147483647;background:#1a1a2e;border:1px solid rgba(168,85,247,0.5);border-radius:14px;padding:14px 18px;color:white;font-size:14px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 32px rgba(0,0,0,0.6);display:flex;align-items:center;gap:10px;min-width:280px;';
+                const style = document.createElement('style');
+                style.textContent = '@keyframes optaxSpin{to{transform:rotate(360deg)}}';
+                (document.head || document.documentElement).appendChild(style);
+                document.body.appendChild(toast);
+              }
+              clearEl(toast);
+              toast.style.borderColor = isError ? 'rgba(248,113,113,0.5)' : isLoading ? 'rgba(168,85,247,0.5)' : 'rgba(74,222,128,0.5)';
+
+              const icon = document.createElement('div');
+              if (isLoading) {
+                icon.style.cssText = 'width:18px;height:18px;border:2px solid #a855f7;border-top-color:transparent;border-radius:50%;animation:optaxSpin 0.8s linear infinite;flex-shrink:0;';
+              } else {
+                icon.textContent = isError ? '✗' : '✓';
+                icon.style.cssText = 'font-size:18px;font-weight:bold;color:' + (isError ? '#f87171' : '#4ade80') + ';flex-shrink:0;';
+              }
+              toast.appendChild(icon);
+
+              const textDiv = document.createElement('div');
+              const label = document.createElement('div');
+              label.style.cssText = 'font-weight:700;font-size:13px;color:' + (isError ? '#f87171' : isLoading ? '#a855f7' : '#4ade80');
+              label.textContent = isLoading ? 'Opta X — Instalando...' : (isError ? 'Erro na instalação' : 'Instalada com sucesso!');
+              textDiv.appendChild(label);
+              const detail = document.createElement('div');
+              detail.style.cssText = 'font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px;';
+              detail.textContent = msg;
+              textDiv.appendChild(detail);
+              toast.appendChild(textDiv);
+              return toast;
+            }
+
+            async function installExt() {
+              const extId = getExtId();
+              const extName = getExtName();
+              if (!extId) return;
+
+              const btn = document.getElementById(BTN_ID);
+              if (btn) { btn.style.opacity = '0.6'; btn.style.pointerEvents = 'none'; }
+
+              showToast('Instalando ' + extName + '...', false, true);
+
+              try {
+                const result = await window.__optaxInstall(extId, extName);
+                if (result && result.success) {
+                  showToast(extName + ' instalada com sucesso!', false, false);
+                  if (btn) { btn.textContent = '✓ Instalada'; btn.style.background = 'rgba(74,222,128,0.15)'; btn.style.color = '#4ade80'; btn.style.border = '1px solid rgba(74,222,128,0.4)'; }
+                } else {
+                  const errMsg = result?.error || 'Falha na instalação';
+                  showToast(errMsg, true, false);
+                  if (btn) { btn.style.opacity = '1'; btn.style.pointerEvents = 'auto'; }
+                }
+              } catch(e) {
+                showToast('Erro: ' + (e.message || 'desconhecido'), true, false);
+                if (btn) { btn.style.opacity = '1'; btn.style.pointerEvents = 'auto'; }
+              }
+              setTimeout(() => { const t = document.getElementById(TOAST_ID); if(t) t.remove(); }, 8000);
+            }
+
+            function injectButton() {
+              if (document.getElementById(BTN_ID)) return;
+              const extId = getExtId();
+              if (!extId) return;
+
+              // Find the "Usar no Chrome" button area to place ours next to it
+              const existingBtn = Array.from(document.querySelectorAll('button')).find(b =>
+                b.textContent.includes('Usar no Chrome') || b.textContent.includes('Add to Chrome') || b.textContent.includes('Adicionar')
+              );
+
+              const btn = document.createElement('button');
+              btn.id = BTN_ID;
+              btn.textContent = '⬇ Instalar no Opta X';
+              btn.style.cssText = 'display:inline-flex;align-items:center;gap:6px;padding:10px 20px;background:linear-gradient(135deg,#7c3aed,#a855f7);color:white;border:none;border-radius:24px;font-size:14px;font-weight:600;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 2px 12px rgba(168,85,247,0.4);transition:all 0.2s;margin-left:8px;';
+              btn.onmouseenter = () => { btn.style.transform = 'scale(1.03)'; btn.style.boxShadow = '0 4px 20px rgba(168,85,247,0.6)'; };
+              btn.onmouseleave = () => { btn.style.transform = 'scale(1)'; btn.style.boxShadow = '0 2px 12px rgba(168,85,247,0.4)'; };
+              btn.onclick = installExt;
+
+              if (existingBtn && existingBtn.parentNode) {
+                existingBtn.parentNode.insertBefore(btn, existingBtn.nextSibling);
+              } else {
+                // Fallback: add as floating button
+                btn.style.cssText += 'position:fixed;top:80px;right:20px;z-index:2147483647;';
+                document.body.appendChild(btn);
+              }
+            }
+
+            const observer = new MutationObserver(() => injectButton());
+            observer.observe(document.body, { childList: true, subtree: true });
+            injectButton();
+            setTimeout(injectButton, 800);
+            setTimeout(injectButton, 2000);
+          })();
+        `
+        view.webContents.executeJavaScript(interceptScript).catch(() => {})
+      }
+    } catch (e) {}
     // ── AUTOFILL DE SENHAS ────────────────────────────────────────────────
     try {
       const pageUrl = view.webContents.getURL()
@@ -62,14 +195,18 @@ function createTabView(id: string, url: string = 'https://google.com') {
       let pageHost = ''
       try { pageHost = new URL(pageUrl).hostname.replace(/^www\./, '') } catch { return }
       if (!pageHost) return
-      const match = passwords.find((p: any) => {
+      const matches = passwords.filter((p: any) => {
         if (!p || !p.url) return false
         try { return new URL(p.url).hostname.replace(/^www\./, '') === pageHost } catch { return false }
       })
-      if (!match) return
+      if (matches.length === 0) return
+
+      const matchesJson = JSON.stringify(matches)
       const script = `
         (function() {
-          function tryFill() {
+          const matches = ${matchesJson};
+
+          function fillWith(cred) {
             try {
               const inputs = Array.from(document.querySelectorAll('input'));
               let userField = null, passField = null;
@@ -81,10 +218,10 @@ function createTabView(id: string, url: string = 'https://google.com') {
               });
               if (userField && passField) {
                 const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                setter.call(userField, ${JSON.stringify(match.username)});
+                setter.call(userField, cred.username);
                 userField.dispatchEvent(new Event('input', { bubbles: true }));
                 userField.dispatchEvent(new Event('change', { bubbles: true }));
-                setter.call(passField, ${JSON.stringify(match.password)});
+                setter.call(passField, cred.password);
                 passField.dispatchEvent(new Event('input', { bubbles: true }));
                 passField.dispatchEvent(new Event('change', { bubbles: true }));
                 return true;
@@ -92,7 +229,116 @@ function createTabView(id: string, url: string = 'https://google.com') {
             } catch(e) {}
             return false;
           }
-          if (!tryFill()) { setTimeout(tryFill, 800); setTimeout(tryFill, 2500); }
+
+          function showPicker(passField) {
+            // Remove existing picker
+            const old = document.getElementById('__optax_picker__');
+            if (old) old.remove();
+
+            const rect = passField.getBoundingClientRect();
+            const picker = document.createElement('div');
+            picker.id = '__optax_picker__';
+            picker.style.cssText = \`
+              position: fixed;
+              left: \${rect.left}px;
+              top: \${rect.bottom + 4}px;
+              min-width: \${Math.max(rect.width, 280)}px;
+              max-width: 360px;
+              background: #1a1a1f;
+              border: 1px solid rgba(255,255,255,0.12);
+              border-radius: 12px;
+              box-shadow: 0 8px 32px rgba(0,0,0,0.8);
+              z-index: 2147483647;
+              overflow: hidden;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            \`;
+
+            const header = document.createElement('div');
+            header.style.cssText = 'padding: 8px 12px; font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.1em; border-bottom: 1px solid rgba(255,255,255,0.06);';
+            header.textContent = 'Senhas salvas — Opta X';
+            picker.appendChild(header);
+
+            // Scrollable container for items
+            const itemsContainer = document.createElement('div');
+            itemsContainer.style.cssText = 'max-height: 280px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.15) transparent;';
+            picker.appendChild(itemsContainer);
+
+            matches.forEach((cred, i) => {
+              const item = document.createElement('div');
+              item.style.cssText = \`
+                display: flex; align-items: center; gap: 10px;
+                padding: 10px 12px; cursor: pointer;
+                transition: background 0.1s;
+                border-bottom: \${i < matches.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none'};
+              \`;
+              item.onmouseenter = () => item.style.background = 'rgba(255,255,255,0.06)';
+              item.onmouseleave = () => item.style.background = 'transparent';
+
+              const avatar = document.createElement('div');
+              avatar.style.cssText = 'width: 28px; height: 28px; border-radius: 50%; background: rgba(168,85,247,0.2); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #a855f7; flex-shrink: 0;';
+              avatar.textContent = (cred.username[0] || '?').toUpperCase();
+
+              const info = document.createElement('div');
+              info.style.cssText = 'flex: 1; min-width: 0;';
+              const user = document.createElement('div');
+              user.style.cssText = 'font-size: 13px; color: rgba(255,255,255,0.85); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+              user.textContent = cred.username;
+              const pass = document.createElement('div');
+              pass.style.cssText = 'font-size: 11px; color: rgba(255,255,255,0.3); margin-top: 1px;';
+              pass.textContent = '••••••••';
+              info.appendChild(user);
+              info.appendChild(pass);
+
+              item.appendChild(avatar);
+              item.appendChild(info);
+              item.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                picker.remove();
+                fillWith(cred);
+              });
+              itemsContainer.appendChild(item);
+            });
+
+            document.body.appendChild(picker);
+            document.addEventListener('mousedown', (e) => {
+              if (!picker.contains(e.target)) picker.remove();
+            }, { once: true });
+          }
+
+          function tryAttach() {
+            try {
+              const inputs = Array.from(document.querySelectorAll('input'));
+              let userField = null, passField = null;
+              inputs.forEach(inp => {
+                const t = (inp.type || '').toLowerCase();
+                const n = ((inp.name||'') + (inp.id||'') + (inp.autocomplete||'')).toLowerCase();
+                if (!passField && t === 'password') passField = inp;
+                if (!userField && (t === 'email' || t === 'text' || n.includes('user') || n.includes('email') || n.includes('login'))) userField = inp;
+              });
+
+              if (userField && passField) {
+                if (matches.length === 1) {
+                  // Só uma conta — preenche direto
+                  fillWith(matches[0]);
+                } else {
+                  // Múltiplas contas — mostra picker ao focar no campo
+                  userField.addEventListener('focus', () => showPicker(userField), { once: false });
+                  passField.addEventListener('focus', () => showPicker(passField), { once: false });
+                  // Mostra imediatamente se o campo já está em foco
+                  if (document.activeElement === userField || document.activeElement === passField) {
+                    showPicker(userField);
+                  }
+                }
+                return true;
+              }
+            } catch(e) {}
+            return false;
+          }
+
+          if (!tryAttach()) {
+            setTimeout(tryAttach, 800);
+            setTimeout(tryAttach, 2500);
+          }
         })();
       `
       view.webContents.executeJavaScript(script).catch(() => {})
@@ -271,6 +517,10 @@ function getBrowserData(browser: string): { bookmarks: any[], history: any[] } {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function createWindow() {
+  // Override user agent to Chrome so Web Store and other sites work correctly
+  const chromeUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.234 Safari/537.36'
+  session.defaultSession.setUserAgent(chromeUA)
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -789,6 +1039,248 @@ function createWindow() {
     if (favEditPopup && !favEditPopup.isDestroyed()) { favEditPopup.close(); favEditPopup = null }
   })
 
+  // ── CHROME WEB STORE CRX INSTALLER ────────────────────────────────────────
+
+  async function downloadFile(url: string, dest: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const chromeUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      const doGet = (getUrl: string, depth = 0) => {
+        if (depth > 5) { reject(new Error('Too many redirects')); return }
+        https.get(getUrl, { headers: { 'User-Agent': chromeUA } }, (res) => {
+          if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
+            doGet(res.headers.location, depth + 1); return
+          }
+          if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return }
+          const file = fs.createWriteStream(dest)
+          res.pipe(file)
+          file.on('finish', () => { file.close(); resolve() })
+          file.on('error', reject)
+        }).on('error', reject).setTimeout(20000, function() { this.destroy(); reject(new Error('Timeout')) })
+      }
+      doGet(url)
+    })
+  }
+
+  async function installCrxFromWebStore(extId: string, extName: string): Promise<{success: boolean, error?: string}> {
+    const userData = app.getPath('userData')
+    const crxFile = path.join(userData, `${extId}.crx`)
+    const extDir = path.join(userData, 'extensions', extId)
+    try {
+      // Use https directly with Chrome headers
+      const crxUrl = `https://clients2.google.com/service/update2/crx?response=redirect&prodversion=120.0.6099.234&acceptformat=crx3,crx2&x=id%3D${extId}%26uc&nacl_arch=x86-64&prodchannel=stable`
+
+      await new Promise<void>((resolve, reject) => {
+        const chromeUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.234 Safari/537.36'
+        
+        const doRequest = (url: string, depth = 0) => {
+          if (depth > 5) { reject(new Error('Muitos redirecionamentos')); return }
+          const urlObj = new URL(url)
+          const mod = urlObj.protocol === 'https:' ? require('https') : require('http')
+          const req = mod.get(url, {
+            headers: {
+              'User-Agent': chromeUA,
+              'Accept': '*/*',
+              'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8'
+            }
+          }, (res: any) => {
+            if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 303) {
+              doRequest(res.headers.location, depth + 1)
+              return
+            }
+            if (res.statusCode !== 200) {
+              reject(new Error(`HTTP ${res.statusCode}`))
+              return
+            }
+            const chunks: Buffer[] = []
+            res.on('data', (c: Buffer) => chunks.push(c))
+            res.on('end', () => {
+              const buf = Buffer.concat(chunks)
+              fs.writeFileSync(crxFile, buf)
+              resolve()
+            })
+            res.on('error', reject)
+          })
+          req.on('error', reject)
+          req.setTimeout(20000, () => { req.destroy(); reject(new Error('Timeout')) })
+        }
+        doRequest(crxUrl)
+      })
+
+      const crxData = fs.readFileSync(crxFile)
+      console.log(`[CRX] Downloaded ${crxData.length} bytes for ${extId}`)
+      
+      if (crxData.length < 1000) {
+        fs.unlink(crxFile, () => {})
+        return { success: false, error: `Download incompleto (${crxData.length} bytes) — extensão pode não estar disponível` }
+      }
+
+      let zipStart = -1
+      for (let i = 0; i < crxData.length - 4; i++) {
+        if (crxData[i] === 0x50 && crxData[i+1] === 0x4B && crxData[i+2] === 0x03 && crxData[i+3] === 0x04) { zipStart = i; break }
+      }
+      if (zipStart < 0) { fs.unlink(crxFile, () => {}); return { success: false, error: 'Formato CRX inválido' } }
+
+      const zipFile = crxFile.replace('.crx', '.zip')
+      fs.writeFileSync(zipFile, crxData.slice(zipStart))
+      if (!fs.existsSync(extDir)) fs.mkdirSync(extDir, { recursive: true })
+
+      const { execSync } = require('child_process')
+      try {
+        if (process.platform === 'win32') execSync(`powershell -Command "Expand-Archive -Path '${zipFile}' -DestinationPath '${extDir}' -Force"`, { timeout: 30000 })
+        else execSync(`unzip -o "${zipFile}" -d "${extDir}"`, { timeout: 30000 })
+      } catch (e: any) {
+        fs.unlink(zipFile, () => {})
+        fs.unlink(crxFile, () => {})
+        return { success: false, error: `Erro ao extrair: ${e.message}` }
+      }
+
+      fs.unlink(zipFile, () => {})
+      fs.unlink(crxFile, () => {})
+
+      if (!fs.existsSync(path.join(extDir, 'manifest.json'))) return { success: false, error: 'manifest.json não encontrado após extração' }
+
+      await session.defaultSession.loadExtension(extDir, { allowFileAccess: true })
+      const saved: string[] = store.get('devExtensions', []) as string[]
+      if (!saved.includes(extDir)) store.set('devExtensions', [...saved, extDir])
+      if (isWindowSafe()) mainWindow!.webContents.send('extension-installed', { id: extId, name: extName })
+      return { success: true }
+    } catch (e: any) {
+      console.error(`[CRX] Error:`, e.message)
+      try { fs.unlink(crxFile, () => {}) } catch {}
+      return { success: false, error: e.message }
+    }
+  }
+
+  ipcMain.handle('install-webstore-extension', async (_: any, { extId, extName }: { extId: string, extName: string }) => {
+    console.log(`[CRX] Starting install of ${extName} (${extId})`)
+    if (isWindowSafe()) mainWindow!.webContents.send('extension-installing', { id: extId, name: extName })
+    const result = await installCrxFromWebStore(extId, extName)
+    console.log(`[CRX] Result:`, JSON.stringify(result))
+    if (isWindowSafe()) mainWindow!.webContents.send('extension-install-result', { ...result, name: extName })
+    return result
+  })
+
+  ipcMain.handle('open-extension-popup', async (_: any, { extId }: { extId: string }) => {
+    try {
+      const allExts = session.defaultSession.getAllExtensions()
+      const ext = allExts.find((e: any) => e.id === extId)
+      if (!ext) return { success: false }
+
+      const manifest = ext.manifest || {}
+      const popupPath = manifest.browser_action?.default_popup || manifest.action?.default_popup
+
+      if (!popupPath) return { success: false, error: 'Extensão não tem popup' }
+
+      const popupUrl = `chrome-extension://${extId}/${popupPath}`
+      const [winW] = mainWindow!.getContentSize()
+      const winBounds = mainWindow!.getBounds()
+
+      const popup = new BrowserWindow({
+        width: 380,
+        height: 500,
+        x: winBounds.x + winW - 400,
+        y: winBounds.y + 80,
+        frame: false,
+        alwaysOnTop: true,
+        resizable: true,
+        skipTaskbar: true,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          session: session.defaultSession
+        }
+      })
+
+      popup.loadURL(popupUrl)
+      popup.on('blur', () => popup.close())
+      popup.show()
+      return { success: true }
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+  })
+
+  ipcMain.handle('get-loaded-extensions', async () => {
+    try {
+      const allExts = session.defaultSession.getAllExtensions()
+      const savedPaths: string[] = store.get('devExtensions', []) as string[]
+
+      return allExts.map((ext: any) => {
+        let iconUrl = ''
+        let resolvedName = ext.name || 'Extensão'
+
+        try {
+          const manifest = ext.manifest || {}
+
+          // Resolve _MSG_ name from _locales
+          let extPath = ext.path || savedPaths.find(p => {
+            try {
+              const m = JSON.parse(fs.readFileSync(path.join(p, 'manifest.json'), 'utf-8'))
+              return m.name === ext.name || m.name === resolvedName
+            } catch { return false }
+          }) || ''
+
+          // If name starts with __MSG_, resolve it
+          if (resolvedName.startsWith('__MSG_') && extPath) {
+            const msgKey = resolvedName.replace(/__MSG_|__/g, '')
+            for (const locale of ['pt_BR', 'pt', 'en', 'en_US']) {
+              try {
+                const msgFile = path.join(extPath, '_locales', locale, 'messages.json')
+                if (fs.existsSync(msgFile)) {
+                  const msgs = JSON.parse(fs.readFileSync(msgFile, 'utf-8'))
+                  const found = msgs[msgKey] || msgs[msgKey.toLowerCase()]
+                  if (found?.message) { resolvedName = found.message; break }
+                }
+              } catch {}
+            }
+            // Still __MSG_? try manifest directly
+            if (resolvedName.startsWith('__MSG_')) {
+              resolvedName = manifest.description || extPath.split(path.sep).pop() || 'Extensão'
+            }
+          }
+
+          if (extPath) {
+            const iconSources = [manifest.icons, manifest.browser_action?.default_icon, manifest.action?.default_icon]
+            let iconPath = ''
+            for (const src of iconSources) {
+              if (!src) continue
+              if (typeof src === 'string') { iconPath = src; break }
+              if (typeof src === 'object') {
+                iconPath = src['128'] || src['64'] || src['48'] || src['32'] || src['16'] || ''
+                if (iconPath) break
+              }
+            }
+            if (!iconPath) {
+              for (const name of ['icon128.png', 'icon48.png', 'icon32.png', 'icon.png', 'images/icon128.png']) {
+                if (fs.existsSync(path.join(extPath, name))) { iconPath = name; break }
+              }
+            }
+            if (iconPath) {
+              const absPath = path.join(extPath, iconPath.replace(/^\//, ''))
+              if (fs.existsSync(absPath)) {
+                const imgData = fs.readFileSync(absPath)
+                const ext2 = path.extname(absPath).toLowerCase().replace('.', '')
+                const mime = ext2 === 'svg' ? 'image/svg+xml' : 'image/png'
+                iconUrl = `data:${mime};base64,${imgData.toString('base64')}`
+              }
+            }
+          }
+        } catch (e) {}
+
+        return { id: ext.id, name: resolvedName, version: ext.manifest?.version || '', iconUrl }
+      })
+    } catch { return [] }
+  })
+
+  ipcMain.on('set-pinned-extensions', (_: any, ids: string[]) => {
+    store.set('pinnedExtensions', ids)
+    if (isWindowSafe()) mainWindow!.webContents.send('pinned-extensions-updated', ids)
+  })
+
+  ipcMain.handle('get-pinned-extensions', () => {
+    return store.get('pinnedExtensions', [])
+  })
+
   ipcMain.handle('get-dev-extensions', async () => {
     const saved: string[] = store.get('devExtensions', []) as string[]
     return saved.filter((p: string) => fs.existsSync(p)).map((extPath: string) => {
@@ -981,6 +1473,19 @@ function addToHistory(url: string, title: string) {
   } catch (e) {}
 }
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  // Spoof Chrome user agent so Chrome Web Store accepts the browser
+  const chromeUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.234 Safari/537.36'
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    details.requestHeaders['User-Agent'] = chromeUA
+    // Tell Web Store we're Chrome
+    if (details.url.includes('chrome.google.com/webstore') || details.url.includes('chromewebstore.google.com')) {
+      details.requestHeaders['X-Chrome-UMA-Enabled'] = '1'
+      details.requestHeaders['X-Client-Data'] = ''
+    }
+    callback({ requestHeaders: details.requestHeaders })
+  })
+  createWindow()
+})
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
